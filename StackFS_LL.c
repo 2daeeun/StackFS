@@ -51,6 +51,7 @@ pthread_mutex_t mutex; /* Protecting the above mutex lock */
 
 #ifdef ENABLE_EXTFUSE
 static int rootfd = -1;
+#define STACKFS_HANDLERS_MAP 2
 #endif
 
 #ifdef ENABLE_STATS
@@ -2097,24 +2098,49 @@ static void stackfs_ll_init(void *userdata,
 		    struct fuse_conn_info *conn)
 {
 	struct lo_data *lo = (struct lo_data*) userdata;
+	const char *bpf_object = getenv("EXTFUSE_BPF_OBJECT");
+	uint32_t disabled_handlers[] = { FUSE_GETXATTR, FUSE_FLUSH };
+	size_t i;
 
+	if (!bpf_object || bpf_object[0] != '/') {
+		ERROR("EXTFUSE_BPF_OBJECT must name an absolute BPF object path\n");
+		exit(EXIT_FAILURE);
+	}
 	if (conn->capable & FUSE_CAP_EXTFUSE) {
-		/* FIXME hard-coded bpf file path */
-		INFO("ALERT: Attempting to load ExtFUSE eBPF bytecode from /tmp/extfuse.o\n");
-		lo->ebpf_ctxt = ebpf_init("/tmp/extfuse.o");
+		ERROR("Loading ExtFUSE eBPF bytecode from %s\n", bpf_object);
+		lo->ebpf_ctxt = ebpf_init((char *)bpf_object);
 		if (!lo->ebpf_ctxt) {
 			ERROR("\tENABLE_EXTFUSE failed %s\n",
 				strerror(errno));
+			exit(EXIT_FAILURE);
 		} else {
 			ERROR("\tExtFUSE eBPF bytecode loaded: ctxt=0x%lx fd=%d\n",
 				(unsigned long)lo->ebpf_ctxt, lo->ebpf_ctxt->ctrl_fd);
+			/*
+			 * The preserved program returns unconditional ENODATA for
+			 * GETXATTR and completes FLUSH in BPF.  The common Fig. 9
+			 * profile keeps both as daemon upcalls in both target kernels.
+			 */
+			for (i = 0; i < sizeof(disabled_handlers) /
+					      sizeof(disabled_handlers[0]); i++) {
+				if (ebpf_data_delete(lo->ebpf_ctxt,
+						       &disabled_handlers[i],
+						       STACKFS_HANDLERS_MAP)) {
+					ERROR("Failed to disable handler opcode=%u: %s\n",
+						disabled_handlers[i], strerror(errno));
+					exit(EXIT_FAILURE);
+				}
+			}
+			ERROR("ExtFUSE common handlers: LOOKUP,GETATTR; "
+			      "GETXATTR,FLUSH forced to upcall\n");
 			conn->want |= FUSE_CAP_EXTFUSE;
 			conn->extfuse_prog_fd = lo->ebpf_ctxt->ctrl_fd;
 		}
 	} else {
-			ERROR("\tExtFUSE not enabled flags:0x%lx ebpf_flag:0x%lx mask:0x%lx\n",
-				(unsigned long)conn->capable, (unsigned long)FUSE_CAP_EXTFUSE,
-				(unsigned long)(conn->capable & FUSE_CAP_EXTFUSE));
+		ERROR("ExtFUSE capability missing flags:0x%lx mask:0x%lx\n",
+			(unsigned long)conn->capable,
+			(unsigned long)FUSE_CAP_EXTFUSE);
+		exit(EXIT_FAILURE);
 	}
 }
 #endif

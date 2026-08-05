@@ -2,10 +2,27 @@
 
 You need modified [libfuse](https://github.com/extfuse/libfuse/tree/ExtFUSE-1.0) and [extfuse](https://github.com/extfuse/extfuse) library to add ExtFUSE support to StackFS.
 
+The Makefile builds two variants from this same source tree. With the default
+`BUILD_DIR=build` they are:
+
+```text
+build/StackFS_opt    FUSE Opt baseline
+build/StackFS_mdopt  ExtFUSE LOOKUP/GETATTR fast path
 ```
-$ git clone https://github.com/ashishbijlani/StackFS
-$ cd StackFS
-$ make
-$ export LIB_PATH=$HOME/libfuse/lib/.libs:$HOME/extfuse
-$ sudo sh -c "LD_LIBRARY_PATH=$LIB_PATH ./StackFS_ll -o max_write=131072 -o writeback_cache -o splice_read -o splice_write -o splice_move -r $ROOT_DIR $MNT_DIR -o allow_other"
+
+Direct build commands are:
+
+```bash
+make opt
+make mdopt EXTFUSE_REPO_PATH=/home/leedaeeun/Documents/github/ExtFUSE_Code/extfuse
 ```
+
+`StackFS_mdopt` requires an absolute BPF object path at runtime:
+
+```bash
+export EXTFUSE_BPF_OBJECT=/home/leedaeeun/Documents/github/ExtFUSE_Code/extfuse/bpf/extfuse.o
+```
+
+For the reproducible Ubuntu 16.04/original ExtFUSE build, mount profile, local
+libfuse prefix, and result paths, use
+`/home/leedaeeun/Documents/github/fuse_exp/fig9/Makefile` and its README.
