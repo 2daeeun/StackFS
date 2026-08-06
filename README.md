@@ -10,11 +10,27 @@ build/StackFS_opt    FUSE Opt baseline
 build/StackFS_mdopt  ExtFUSE LOOKUP/GETATTR fast path
 ```
 
-Direct build commands are:
+In the standard workspace layout, the direct build automatically uses
+`.fig9-build/libfuse-prefix/lib/pkgconfig/fuse3.pc` when it exists and finds
+the sibling `ExtFUSE_Code/extfuse` tree:
 
 ```bash
-make opt
-make mdopt EXTFUSE_REPO_PATH=/home/leedaeeun/Documents/github/ExtFUSE_Code/extfuse
+make
+```
+
+If that local libfuse prefix has not been prepared yet, build the original
+Fig. 9 userspace first on Ubuntu 16.04:
+
+```bash
+make -C ../fuse_exp/fig9 TARGET=original all
+```
+
+An explicit `PKG_CONFIG_PATH` or `EXTFUSE_REPO_PATH` overrides that automatic
+selection. Outside the standard layout, for example:
+
+```bash
+PKG_CONFIG_PATH=/path/to/lib/pkgconfig \
+make EXTFUSE_REPO_PATH=/path/to/extfuse
 ```
 
 `StackFS_mdopt` requires an absolute BPF object path at runtime:
