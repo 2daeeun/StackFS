@@ -39,6 +39,12 @@ make EXTFUSE_REPO_PATH=/path/to/extfuse
 export EXTFUSE_BPF_OBJECT=/home/leedaeeun/Documents/github/ExtFUSE_Code/extfuse/bpf/extfuse.o
 ```
 
+Both variants record whether `FUSE_CAP_WRITEBACK_CACHE` was negotiated.  In
+writeback mode, StackFS opens write-only backing files as `O_RDWR` and removes
+`O_APPEND`: the kernel may issue reads to fill partially dirty pages and sends
+explicit offsets for append writes.  This is required by workloads such as the
+Linux `tinyconfig` merge step.
+
 For the reproducible Ubuntu 16.04/original ExtFUSE build, mount profile, local
 libfuse prefix, and result paths, use
 `/home/leedaeeun/Documents/github/fuse_exp/fig9/Makefile` and its README.

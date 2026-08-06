@@ -823,10 +823,31 @@ static void stackfs_ll_setattr(fuse_req_t req, fuse_ino_t ino,
 	fuse_reply_attr(req, &stbuf, attr_timeout);
 }
 
+static int stackfs_backing_open_flags(const struct lo_data *lo, int flags)
+{
+	if (!lo->writeback)
+		return flags;
+
+	/*
+	 * With writeback cache the kernel can issue READ requests for a file
+	 * opened write-only, for example while filling a partially dirty page.
+	 * It also implements append positioning itself.  The backing descriptor
+	 * must therefore be readable and must not retain O_APPEND while requests
+	 * continue to carry explicit offsets.
+	 */
+	if ((flags & O_ACCMODE) == O_WRONLY) {
+		flags &= ~O_ACCMODE;
+		flags |= O_RDWR;
+	}
+	flags &= ~O_APPEND;
+
+	return flags;
+}
+
 static void stackfs_ll_create(fuse_req_t req, fuse_ino_t pino,
 		const char *name, mode_t mode, struct fuse_file_info *fi)
 {
-	int fd, res;
+	int fd, flags, res;
 	struct fuse_entry_param e;
 
     struct lo_inode* pinode;
@@ -852,7 +873,8 @@ static void stackfs_ll_create(fuse_req_t req, fuse_ino_t pino,
 				gettid(), name, mode, (uint64_t)pino, ppath);
 
 	generate_start_time(req);
-	fd = open(cpath, fi->flags, mode);
+	flags = stackfs_backing_open_flags(lo_data, fi->flags);
+	fd = open(cpath, flags, mode);
 	if (fd == -1) {
 		generate_end_time(req);
 		populate_time(req);
@@ -980,7 +1002,7 @@ static void stackfs_ll_open(fuse_req_t req, fuse_ino_t ino,
     char path[PATH_MAX];
 
 	struct lo_data *lo_data = get_lo_data(req);
-	int flags = fi->flags;
+	int flags = stackfs_backing_open_flags(lo_data, fi->flags);
 
 	INCR_COUNTER(open);
 
@@ -1370,7 +1392,7 @@ static void stackfs_ll_write(fuse_req_t req, fuse_ino_t ino, const char *buf,
 static void stackfs_ll_write_buf(fuse_req_t req, fuse_ino_t ino,
 		struct fuse_bufvec *buf, off_t off, struct fuse_file_info *fi)
 {
-	int res;
+	ssize_t res;
 	(void) ino;
 
 	struct fuse_bufvec dst = FUSE_BUFVEC_INIT(fuse_buf_size(buf));
@@ -1399,10 +1421,17 @@ static void stackfs_ll_write_buf(fuse_req_t req, fuse_ino_t ino,
 	res = fuse_buf_copy(&dst, buf, FUSE_BUF_SPLICE_NONBLOCK);
 	generate_end_time(req);
 	populate_time(req);
-	if (res >= 0)
-		fuse_reply_write(req, res);
-	else
-		fuse_reply_err(req, res);
+	if (res >= 0) {
+		fuse_reply_write(req, (size_t)res);
+	} else {
+		int err = (int)-res;
+
+		ERROR("[%d] \t Write_buf @ 0x%"PRIx64" fd: 0x%"PRIx64
+		      " off: %jd, size: %zu failed: %s\n",
+		      gettid(), (uint64_t)ino, fi->fh, (intmax_t)off,
+		      fuse_buf_size(buf), strerror(err));
+		fuse_reply_err(req, err);
+	}
 }
 #endif
 
@@ -2108,15 +2137,23 @@ static void stackfs_ll_destroy(void *userdata)
 		ebpf_fini(lo->ebpf_ctxt);
 	}
 }
+#endif
 
 static void stackfs_ll_init(void *userdata,
 		    struct fuse_conn_info *conn)
 {
 	struct lo_data *lo = (struct lo_data*) userdata;
+#ifdef ENABLE_EXTFUSE
 	const char *bpf_object = getenv("EXTFUSE_BPF_OBJECT");
 	uint32_t disabled_handlers[] = { FUSE_GETXATTR, FUSE_FLUSH };
 	size_t i;
+#endif
 
+	lo->writeback = !!(conn->capable & conn->want &
+				FUSE_CAP_WRITEBACK_CACHE);
+	ERROR("Writeback cache: %s\n", lo->writeback ? "enabled" : "disabled");
+
+#ifdef ENABLE_EXTFUSE
 	if (!bpf_object || bpf_object[0] != '/') {
 		ERROR("EXTFUSE_BPF_OBJECT must name an absolute BPF object path\n");
 		exit(EXIT_FAILURE);
@@ -2157,8 +2194,8 @@ static void stackfs_ll_init(void *userdata,
 			(unsigned long)FUSE_CAP_EXTFUSE);
 		exit(EXIT_FAILURE);
 	}
-}
 #endif
+}
 
 static void stackfs_ll_fallocate(fuse_req_t req, fuse_ino_t ino, int mode,
 		off_t offset, off_t length, struct fuse_file_info *fi)
@@ -2222,8 +2259,8 @@ static int stackfs_ll_utimes(const char *vpath, const struct timespec tv[2])
 #endif
 
 static struct fuse_lowlevel_ops hello_ll_oper = {
-#ifdef ENABLE_EXTFUSE
 	.init			= 	stackfs_ll_init,
+#ifdef ENABLE_EXTFUSE
 	.destroy		= 	stackfs_ll_destroy,
 #endif
 	.lookup			=	stackfs_ll_lookup,

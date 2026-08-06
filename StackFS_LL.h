@@ -51,9 +51,10 @@ struct lo_data {
     struct lo_inode root;
     /* do we still need this ? let's see*/
     double attr_valid;
-	double entry_valid;
+    double entry_valid;
+    int writeback;
 #ifdef ENABLE_EXTFUSE
-	ebpf_context_t *ebpf_ctxt;
+    ebpf_context_t *ebpf_ctxt;
 #endif
 };
 
