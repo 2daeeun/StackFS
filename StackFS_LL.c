@@ -725,19 +725,34 @@ static void stackfs_ll_setattr(fuse_req_t req, fuse_ino_t ino,
 		}
 	}
 
-	/* Update Time */
-	if (to_set & (FUSE_SET_ATTR_ATIME | FUSE_SET_ATTR_MTIME)) {
-		struct utimbuf tv;
-		tv.actime = attr->st_atime;
-		tv.modtime = attr->st_mtime;
-		INFO("[%d] \t UTIME on 0x%"PRIx64" (%s)\n",
+	/* Preserve symlink semantics and timestamps at nanosecond precision. */
+	if (to_set & (FUSE_SET_ATTR_ATIME | FUSE_SET_ATTR_MTIME |
+			FUSE_SET_ATTR_ATIME_NOW | FUSE_SET_ATTR_MTIME_NOW)) {
+		struct timespec tv[2];
+
+		tv[0].tv_sec = 0;
+		tv[0].tv_nsec = UTIME_OMIT;
+		tv[1].tv_sec = 0;
+		tv[1].tv_nsec = UTIME_OMIT;
+
+		if (to_set & FUSE_SET_ATTR_ATIME_NOW)
+			tv[0].tv_nsec = UTIME_NOW;
+		else if (to_set & FUSE_SET_ATTR_ATIME)
+			tv[0] = attr->st_atim;
+
+		if (to_set & FUSE_SET_ATTR_MTIME_NOW)
+			tv[1].tv_nsec = UTIME_NOW;
+		else if (to_set & FUSE_SET_ATTR_MTIME)
+			tv[1] = attr->st_mtim;
+
+		INFO("[%d] \t UTIMENS on 0x%"PRIx64" (%s)\n",
 						gettid(), (uint64_t)ino, path);
-		res = utime(path, &tv);
+		res = utimensat(AT_FDCWD, path, tv, AT_SYMLINK_NOFOLLOW);
 		if (res != 0) {
 			generate_end_time(req);
 			populate_time(req);
 
-			ERROR("[%d] \t utime: setattr(%s) failed: %s\n",
+			ERROR("[%d] \t utimensat: setattr(%s) failed: %s\n",
 				gettid(), path, strerror(errno));
 			fuse_reply_err(req, errno);
 			return;
